@@ -16,9 +16,17 @@ export default function Home() {
   const [status, setStatus] = useState('Tap the mic to talk');
   const [error, setError] = useState('');
   const [ttsReady, setTtsReady] = useState(false);
+  const [bridgeUrl, setBridgeUrl] = useState('');
+  const [showSettings, setShowSettings] = useState(false);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<Message[]>([]);
+
+  // Load bridge URL from localStorage
+  useEffect(() => {
+    const saved = localStorage.getItem('bridgeUrl');
+    if (saved) setBridgeUrl(saved);
+  }, []);
 
   // Keep ref in sync with state for use in callbacks
   useEffect(() => {
@@ -134,6 +142,7 @@ export default function Home() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             messages: newMessages.slice(-20),
+            bridgeUrl: bridgeUrl || undefined,
           }),
         });
 
@@ -159,7 +168,7 @@ export default function Home() {
         setStatus('Error — tap mic to try again');
       }
     },
-    [speak]
+    [speak, bridgeUrl]
   );
 
   const startListening = useCallback(() => {
@@ -274,13 +283,64 @@ export default function Home() {
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
         <h1 className="text-lg font-semibold text-white">Casey Voice</h1>
-        <button
-          onClick={handleReplay}
-          className="text-xs text-zinc-500 active:text-white px-2 py-1"
-        >
-          {messages.length > 0 ? `Replay last` : ''}
-        </button>
+        <div className="flex items-center gap-3">
+          {bridgeUrl && (
+            <span className="text-[10px] text-green-500 font-medium">BRIDGE</span>
+          )}
+          <button
+            onClick={() => setShowSettings(!showSettings)}
+            className="text-xs text-zinc-500 active:text-white px-2 py-1"
+          >
+            ⚙️
+          </button>
+        </div>
       </div>
+
+      {/* Settings panel */}
+      {showSettings && (
+        <div className="px-4 py-3 border-b border-zinc-800 bg-zinc-900">
+          <p className="text-xs text-zinc-400 mb-2">
+            Bridge URL (connects to your PC&apos;s Claude Code)
+          </p>
+          <div className="flex gap-2">
+            <input
+              type="url"
+              value={bridgeUrl}
+              onChange={(e) => setBridgeUrl(e.target.value)}
+              placeholder="https://your-tunnel-url.loca.lt"
+              className="flex-1 bg-zinc-800 text-white text-sm px-3 py-2 rounded-lg border border-zinc-700 focus:border-blue-500 outline-none"
+            />
+            <button
+              onClick={() => {
+                localStorage.setItem('bridgeUrl', bridgeUrl);
+                setShowSettings(false);
+                setStatus(bridgeUrl ? 'Bridge mode — connected to your PC' : 'Standalone mode');
+              }}
+              className="bg-blue-600 text-white text-sm px-4 py-2 rounded-lg active:bg-blue-700"
+            >
+              Save
+            </button>
+          </div>
+          <div className="flex gap-2 mt-2">
+            <button
+              onClick={handleReplay}
+              className="text-xs text-zinc-500 active:text-white"
+            >
+              🔁 Replay last
+            </button>
+            <button
+              onClick={() => {
+                setBridgeUrl('');
+                localStorage.removeItem('bridgeUrl');
+                setStatus('Standalone mode');
+              }}
+              className="text-xs text-zinc-500 active:text-white"
+            >
+              ✖ Clear bridge
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Messages */}
       <div
