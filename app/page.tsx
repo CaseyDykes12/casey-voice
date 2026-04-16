@@ -137,14 +137,19 @@ export default function Home() {
       setStatus('Thinking...');
 
       try {
-        // Always go through our Vercel API — it relays to bridge server-side
-        const res = await fetch('/api/chat', {
+        // Bridge mode: talk directly to PC tunnel. Standalone: use Vercel API.
+        const endpoint = bridgeUrl
+          ? `${bridgeUrl}/message`
+          : '/api/chat';
+
+        const payload = bridgeUrl
+          ? { text }
+          : { messages: newMessages.slice(-20) };
+
+        const res = await fetch(endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            messages: newMessages.slice(-20),
-            bridgeUrl: bridgeUrl || undefined,
-          }),
+          body: JSON.stringify(payload),
         });
 
         const data = await res.json();
