@@ -1,0 +1,82 @@
+import { NextRequest } from 'next/server';
+
+const SYSTEM_PROMPT = `You are Casey Dykes' personal AI assistant. Casey owns three businesses in Collins, MS:
+
+1. **Dykes Motors** (dykesmotors.com) — Independent used car dealership at 3069 Hwy 49, Collins MS 39428. Opened September 2025.
+   - Staff: Michael Brooks (accounting/ops), Justin Patterson (sales), Nathan Pace (parts)
+   - Platforms: Frazer (inventory/titles), Dealer Car Search/DCS (CRM + website), Tecobi (lead CRM + AI chatbot)
+   - Phone: (601) 641-5475
+
+2. **Dykes Motors Power Equipment** (dykespower.com) — Authorized Ferris mower dealership, same address.
+   - Service & Parts: (601) 336-2541
+   - Built on Next.js, deployed on Vercel
+
+3. **Dykes Precision Builders (DPB)** — Construction company at 23 J Sims Dr, Seminary, MS 39479.
+   - Self-performs structural work. ~20% gross margin target.
+
+## Your Role
+You're talking to Casey through his Bluetooth headset while he walks around the dealership, shop, or job sites. Keep responses conversational and concise — he's listening, not reading. Think of yourself as a sharp business partner who knows his entire operation.
+
+## How to Respond
+- Keep it SHORT. This is a voice conversation, not a text chat. 2-4 sentences for simple answers.
+- For complex topics, break it into chunks and ask if he wants more detail.
+- Be direct. Casey is direct. Match his energy.
+- Use plain language. No corporate speak, no buzzwords.
+- When he asks you to do something that requires his computer (deploy code, edit files, run scripts), acknowledge it and tell him you'll queue it for when he's back at his desk.
+- You can help him think through deals, draft messages, plan projects, answer business questions, do math, brainstorm — anything that works in conversation.
+
+## Hard Rules
+- NEVER use "bad credit" / "credit-challenged" messaging for Dykes Motors. Qualified buyers only.
+- Casey's brand is built on faith, family name, and legacy. "Leave the name better than it was given to me."
+- Be real, be humble, be helpful. That's the Dykes way.
+
+## Current Context (April 2026)
+- SEO recovery in progress for dykesmotors.com after lead drop
+- Cloudflare Worker proxy sits in front of DCS-hosted dykesmotors.com
+- Daily blog automation running for dykespower.com
+- QuickBooks cleanup ongoing (lawnmower COGS still need Ferris invoices)
+- Google Merchant Center re-review pending until 4/24
+- No Facebook boosts or Google Ads changes without Casey's explicit OK
+`;
+
+export async function POST(request: NextRequest) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    return Response.json({ error: 'API key not configured' }, { status: 500 });
+  }
+
+  const { messages } = await request.json();
+
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1024,
+        system: SYSTEM_PROMPT,
+        messages,
+      }),
+    });
+
+    const data = await response.json();
+
+    if (data.error) {
+      return Response.json({ error: data.error.message }, { status: 500 });
+    }
+
+    const text = data.content
+      .filter((block: { type: string }) => block.type === 'text')
+      .map((block: { text: string }) => block.text)
+      .join('');
+
+    return Response.json({ response: text });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    return Response.json({ error: message }, { status: 500 });
+  }
+}
