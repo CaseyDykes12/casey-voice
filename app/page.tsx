@@ -137,13 +137,22 @@ export default function Home() {
       setStatus('Thinking...');
 
       try {
-        const res = await fetch('/api/chat', {
+        // If bridge URL is set, talk directly to Casey's PC
+        const endpoint = bridgeUrl
+          ? `${bridgeUrl}/message`
+          : '/api/chat';
+
+        const payload = bridgeUrl
+          ? { text }
+          : { messages: newMessages.slice(-20) };
+
+        const res = await fetch(endpoint, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            messages: newMessages.slice(-20),
-            bridgeUrl: bridgeUrl || undefined,
-          }),
+          headers: {
+            'Content-Type': 'application/json',
+            'Bypass-Tunnel-Reminder': 'true',
+          },
+          body: JSON.stringify(payload),
         });
 
         const data = await res.json();
