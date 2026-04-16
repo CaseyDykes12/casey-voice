@@ -150,10 +150,19 @@ export default function Home() {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'Accept': 'application/json',
             'Bypass-Tunnel-Reminder': 'true',
           },
           body: JSON.stringify(payload),
         });
+
+        const contentType = res.headers.get('content-type') || '';
+        if (!contentType.includes('application/json')) {
+          const raw = await res.text();
+          throw new Error(raw.includes('cloudflare') || raw.includes('<html')
+            ? 'Cloudflare blocked the request. Try opening the bridge URL in your phone browser first, then come back.'
+            : `Bridge returned non-JSON (${res.status})`);
+        }
 
         const data = await res.json();
 
