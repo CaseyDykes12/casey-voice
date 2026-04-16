@@ -15,9 +15,15 @@ export default function Home() {
   const [transcript, setTranscript] = useState('');
   const [status, setStatus] = useState('Tap the mic to talk');
   const [error, setError] = useState('');
+  const [ttsReady, setTtsReady] = useState(false);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
-  const synthRef = useRef<SpeechSynthesisUtterance | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const messagesRef = useRef<Message[]>([]);
+
+  // Keep ref in sync with state for use in callbacks
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -26,8 +32,28 @@ export default function Home() {
     }
   }, [messages, transcript]);
 
-  const speak = useCallback((text: string) => {
+  // Initialize TTS voices (they load async on mobile)
+  useEffect(() => {
+    const loadVoices = () => {
+      const voices = window.speechSynthesis?.getVoices();
+      if (voices && voices.length > 0) {
+        setTtsReady(true);
+      }
+    };
+    loadVoices();
+    window.speechSynthesis?.addEventListener('voiceschanged', loadVoices);
+    return () => {
+      window.speechSynthesis?.removeEventListener('voiceschanged', loadVoices);
+    };
+  }, []);
+
+  const speak = useCallback((text: string): Promise<void> => {
     return new Promise<void>((resolve) => {
+      if (!window.speechSynthesis) {
+        resolve();
+        return;
+      }
+
       // Cancel any current speech
       window.speechSynthesis.cancel();
 
@@ -41,48 +67,61 @@ export default function Home() {
       clean = clean.replace(/\n{2,}/g, '. ');
       clean = clean.replace(/\n/g, '. ');
 
-      // Truncate for speech
       if (clean.length > 1500) {
         clean = clean.slice(0, 1500) + '. Check your screen for the full response.';
       }
 
-      const utterance = new SpeechSynthesisUtterance(clean);
-      utterance.rate = 1.05;
-      utterance.pitch = 1;
+      // Split into chunks — mobile Chrome cuts off long utterances
+      const chunks = clean.match(/[^.!?]+[.!?]+/g) || [clean];
+      let i = 0;
 
-      // Try to pick a good voice
-      const voices = window.speechSynthesis.getVoices();
-      const preferred = voices.find(
-        (v) =>
-          v.name.includes('Google') ||
-          v.name.includes('Natural') ||
-          v.name.includes('David')
-      );
-      if (preferred) utterance.voice = preferred;
+      const speakNext = () => {
+        if (i >= chunks.length) {
+          setIsSpeaking(false);
+          setStatus('Tap the mic to talk');
+          resolve();
+          return;
+        }
 
-      synthRef.current = utterance;
+        const utterance = new SpeechSynthesisUtterance(chunks[i].trim());
+        utterance.rate = 1.05;
+        utterance.pitch = 1;
+
+        // Pick a good voice
+        const voices = window.speechSynthesis.getVoices();
+        const preferred = voices.find(
+          (v) =>
+            v.name.includes('Google') ||
+            v.name.includes('Natural') ||
+            v.name.includes('David') ||
+            v.name.includes('Enhanced')
+        );
+        if (preferred) utterance.voice = preferred;
+
+        utterance.onend = () => {
+          i++;
+          speakNext();
+        };
+        utterance.onerror = (e) => {
+          console.error('TTS error:', e);
+          i++;
+          speakNext();
+        };
+
+        window.speechSynthesis.speak(utterance);
+      };
+
       setIsSpeaking(true);
       setStatus('Speaking...');
-
-      utterance.onend = () => {
-        setIsSpeaking(false);
-        setStatus('Tap the mic to talk');
-        resolve();
-      };
-      utterance.onerror = () => {
-        setIsSpeaking(false);
-        setStatus('Tap the mic to talk');
-        resolve();
-      };
-
-      window.speechSynthesis.speak(utterance);
+      speakNext();
     });
   }, []);
 
   const sendToApi = useCallback(
     async (text: string) => {
+      const current = messagesRef.current;
       const newMessages: Message[] = [
-        ...messages,
+        ...current,
         { role: 'user', content: text },
       ];
       setMessages(newMessages);
@@ -94,7 +133,7 @@ export default function Home() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            messages: newMessages.slice(-20), // Keep last 20 messages for context
+            messages: newMessages.slice(-20),
           }),
         });
 
@@ -108,7 +147,8 @@ export default function Home() {
         }
 
         const reply = data.response;
-        setMessages([...newMessages, { role: 'assistant', content: reply }]);
+        const updatedMessages: Message[] = [...newMessages, { role: 'assistant', content: reply }];
+        setMessages(updatedMessages);
         setIsThinking(false);
 
         // Speak the response
@@ -119,23 +159,31 @@ export default function Home() {
         setStatus('Error — tap mic to try again');
       }
     },
-    [messages, speak]
+    [speak]
   );
 
   const startListening = useCallback(() => {
     setError('');
     setTranscript('');
 
+    // Prime TTS on user gesture (required on mobile)
+    if (!ttsReady) {
+      const primer = new SpeechSynthesisUtterance('');
+      primer.volume = 0;
+      window.speechSynthesis?.speak(primer);
+      setTtsReady(true);
+    }
+
     const SpeechRecognition =
       window.SpeechRecognition || window.webkitSpeechRecognition;
 
     if (!SpeechRecognition) {
-      setError('Speech recognition not supported. Use Chrome on Android.');
+      setError('Speech recognition not supported. Use Chrome.');
       return;
     }
 
     // Stop any current speech
-    window.speechSynthesis.cancel();
+    window.speechSynthesis?.cancel();
     setIsSpeaking(false);
 
     const recognition = new SpeechRecognition();
@@ -144,7 +192,7 @@ export default function Home() {
     recognition.lang = 'en-US';
 
     let finalTranscript = '';
-    let silenceTimer: NodeJS.Timeout;
+    let silenceTimer: ReturnType<typeof setTimeout>;
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
       let interim = '';
@@ -158,12 +206,10 @@ export default function Home() {
       }
       setTranscript(finalTranscript + interim);
 
-      // Reset silence timer on each result
       clearTimeout(silenceTimer);
       silenceTimer = setTimeout(() => {
-        // Auto-stop after 2s of silence
         recognition.stop();
-      }, 2000);
+      }, 2500);
     };
 
     recognition.onend = () => {
@@ -192,7 +238,7 @@ export default function Home() {
     recognition.start();
     setIsListening(true);
     setStatus('Listening... speak now');
-  }, [sendToApi]);
+  }, [sendToApi, ttsReady]);
 
   const stopListening = useCallback(() => {
     if (recognitionRef.current) {
@@ -202,8 +248,7 @@ export default function Home() {
 
   const handleMicClick = useCallback(() => {
     if (isSpeaking) {
-      // Tap to interrupt speech
-      window.speechSynthesis.cancel();
+      window.speechSynthesis?.cancel();
       setIsSpeaking(false);
       setStatus('Tap the mic to talk');
       return;
@@ -216,14 +261,25 @@ export default function Home() {
     }
   }, [isListening, isSpeaking, isThinking, startListening, stopListening]);
 
+  // Replay last response on long press
+  const handleReplay = useCallback(() => {
+    const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant');
+    if (lastAssistant && !isSpeaking && !isListening && !isThinking) {
+      speak(lastAssistant.content);
+    }
+  }, [messages, isSpeaking, isListening, isThinking, speak]);
+
   return (
     <div className="flex flex-col h-screen bg-black select-none">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
         <h1 className="text-lg font-semibold text-white">Casey Voice</h1>
-        <span className="text-xs text-zinc-500">
-          {messages.length > 0 ? `${messages.length} messages` : ''}
-        </span>
+        <button
+          onClick={handleReplay}
+          className="text-xs text-zinc-500 active:text-white px-2 py-1"
+        >
+          {messages.length > 0 ? `Replay last` : ''}
+        </button>
       </div>
 
       {/* Messages */}
@@ -234,8 +290,8 @@ export default function Home() {
         {messages.length === 0 && !transcript && (
           <div className="flex items-center justify-center h-full">
             <div className="text-center text-zinc-600">
-              <div className="text-4xl mb-4">🎙️</div>
-              <p className="text-lg">Tap the mic and start talking</p>
+              <div className="text-6xl mb-6">🎙️</div>
+              <p className="text-xl font-medium">Tap the mic and talk</p>
               <p className="text-sm mt-2 text-zinc-700">
                 Works with your Shokz headset
               </p>
@@ -260,7 +316,6 @@ export default function Home() {
           </div>
         ))}
 
-        {/* Live transcript */}
         {transcript && (
           <div className="flex justify-end">
             <div className="max-w-[85%] rounded-2xl px-4 py-3 text-sm bg-blue-600/50 text-blue-200 italic">
@@ -269,7 +324,6 @@ export default function Home() {
           </div>
         )}
 
-        {/* Thinking indicator */}
         {isThinking && (
           <div className="flex justify-start">
             <div className="rounded-2xl px-4 py-3 text-sm bg-zinc-800 text-zinc-400">
@@ -287,21 +341,20 @@ export default function Home() {
       )}
 
       {/* Bottom controls */}
-      <div className="flex flex-col items-center pb-8 pt-4 border-t border-zinc-800">
+      <div className="flex flex-col items-center pb-10 pt-4 border-t border-zinc-800">
         <p className="text-xs text-zinc-500 mb-4">{status}</p>
 
-        {/* Mic button */}
         <button
           onClick={handleMicClick}
           disabled={isThinking}
-          className={`w-20 h-20 rounded-full flex items-center justify-center transition-all duration-200 active:scale-95 ${
+          className={`w-24 h-24 rounded-full flex items-center justify-center transition-all duration-200 active:scale-90 ${
             isListening
               ? 'bg-red-500 shadow-lg shadow-red-500/50 animate-pulse'
               : isSpeaking
                 ? 'bg-green-500 shadow-lg shadow-green-500/50'
                 : isThinking
                   ? 'bg-zinc-700 cursor-not-allowed'
-                  : 'bg-white shadow-lg shadow-white/20 hover:shadow-white/40'
+                  : 'bg-white shadow-lg shadow-white/20'
           }`}
         >
           {isListening ? (
@@ -315,11 +368,11 @@ export default function Home() {
           )}
         </button>
 
-        <p className="text-[10px] text-zinc-700 mt-3">
+        <p className="text-[11px] text-zinc-600 mt-3">
           {isListening
-            ? 'Tap to send'
+            ? 'Tap to send now'
             : isSpeaking
-              ? 'Tap to interrupt'
+              ? 'Tap to stop'
               : 'Tap to talk'}
         </p>
       </div>
@@ -329,16 +382,7 @@ export default function Home() {
 
 function MicOffIcon() {
   return (
-    <svg
-      width="32"
-      height="32"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="black"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
+    <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="black" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
       <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
       <line x1="12" x2="12" y1="19" y2="22" />
@@ -348,16 +392,7 @@ function MicOffIcon() {
 
 function MicOnIcon() {
   return (
-    <svg
-      width="32"
-      height="32"
-      viewBox="0 0 24 24"
-      fill="white"
-      stroke="white"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
+    <svg width="36" height="36" viewBox="0 0 24 24" fill="white" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
       <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
       <line x1="12" x2="12" y1="19" y2="22" />
@@ -367,16 +402,7 @@ function MicOnIcon() {
 
 function SpeakerIcon() {
   return (
-    <svg
-      width="32"
-      height="32"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="white"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
+    <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
       <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
       <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
@@ -386,17 +412,7 @@ function SpeakerIcon() {
 
 function ThinkingIcon() {
   return (
-    <svg
-      width="32"
-      height="32"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="#666"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className="animate-spin"
-    >
+    <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#666" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="animate-spin">
       <path d="M21 12a9 9 0 1 1-6.219-8.56" />
     </svg>
   );
