@@ -39,7 +39,10 @@ export async function POST(request: NextRequest) {
       const lastMessage = messages[messages.length - 1];
       const res = await fetch(`${bridgeUrl}/message`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Bypass-Tunnel-Reminder': 'true',
+        },
         body: JSON.stringify({ text: lastMessage.content }),
       });
       const data = await res.json();
