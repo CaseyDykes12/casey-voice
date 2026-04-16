@@ -16,9 +16,32 @@ export default function Home() {
   const [status, setStatus] = useState('Tap the mic to talk');
   const [error, setError] = useState('');
   const [ttsReady, setTtsReady] = useState(false);
+  const [mode, setMode] = useState<'checking' | 'bridge' | 'standalone'>('checking');
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<Message[]>([]);
+
+  const BRIDGE_URL = 'https://voice.dykesmotors.com';
+
+  // Check if bridge (PC) is reachable on mount
+  useEffect(() => {
+    const checkBridge = async () => {
+      try {
+        const res = await fetch(`${BRIDGE_URL}/health`, { signal: AbortSignal.timeout(3000) });
+        if (res.ok) {
+          setMode('bridge');
+          setStatus('Connected to PC — Opus 4.6');
+        } else {
+          setMode('standalone');
+          setStatus('Standalone mode — tap mic to talk');
+        }
+      } catch {
+        setMode('standalone');
+        setStatus('Standalone mode — tap mic to talk');
+      }
+    };
+    checkBridge();
+  }, []);
 
   // Keep ref in sync with state for use in callbacks
   useEffect(() => {
@@ -129,13 +152,33 @@ export default function Home() {
       setStatus('Thinking...');
 
       try {
-        const res = await fetch('/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ messages: newMessages.slice(-20) }),
-        });
+        let data;
 
-        const data = await res.json();
+        // Try bridge first (Opus 4.6 on PC)
+        if (mode === 'bridge') {
+          try {
+            const bridgeRes = await fetch(`${BRIDGE_URL}/message`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ text }),
+              signal: AbortSignal.timeout(120000),
+            });
+            data = await bridgeRes.json();
+          } catch {
+            // Bridge died mid-conversation — fall back
+            setMode('standalone');
+          }
+        }
+
+        // Standalone fallback
+        if (!data || data.error) {
+          const apiRes = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ messages: newMessages.slice(-20) }),
+          });
+          data = await apiRes.json();
+        }
 
         if (data.error) {
           setError(data.error);
@@ -157,7 +200,7 @@ export default function Home() {
         setStatus('Error — tap mic to try again');
       }
     },
-    [speak]
+    [speak, mode]
   );
 
   const startListening = useCallback(() => {
@@ -271,7 +314,15 @@ export default function Home() {
     <div className="flex flex-col h-screen bg-black select-none">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
-        <h1 className="text-lg font-semibold text-white">Casey Voice</h1>
+        <div className="flex items-center gap-2">
+          <h1 className="text-lg font-semibold text-white">Casey Voice</h1>
+          {mode === 'bridge' && (
+            <span className="text-[10px] text-green-500 font-medium">OPUS</span>
+          )}
+          {mode === 'standalone' && (
+            <span className="text-[10px] text-yellow-500 font-medium">SONNET</span>
+          )}
+        </div>
         <button
           onClick={handleReplay}
           className="text-xs text-zinc-500 active:text-white px-2 py-1"
