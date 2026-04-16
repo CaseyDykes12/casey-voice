@@ -41,11 +41,19 @@ export async function POST(request: NextRequest) {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'User-Agent': 'CaseyVoiceBridge/1.0',
           'Bypass-Tunnel-Reminder': 'true',
         },
         body: JSON.stringify({ text: lastMessage.content }),
       });
-      const data = await res.json();
+      const raw = await res.text();
+      let data;
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        return Response.json({ error: 'Bridge returned invalid response — tunnel may be down' }, { status: 502 });
+      }
       if (data.error) {
         return Response.json({ error: data.error }, { status: 500 });
       }
