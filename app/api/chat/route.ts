@@ -31,43 +31,11 @@ You're talking to Casey through his Bluetooth headset while he walks around the 
 `;
 
 export async function POST(request: NextRequest) {
-  const { messages, bridgeUrl } = await request.json();
+  const { messages } = await request.json();
 
-  // If bridgeUrl is set, relay to Casey's local PC bridge
-  if (bridgeUrl) {
-    try {
-      const lastMessage = messages[messages.length - 1];
-      const res = await fetch(`${bridgeUrl}/message`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          'User-Agent': 'CaseyVoiceBridge/1.0',
-          'Bypass-Tunnel-Reminder': 'true',
-        },
-        body: JSON.stringify({ text: lastMessage.content }),
-      });
-      const raw = await res.text();
-      let data;
-      try {
-        data = JSON.parse(raw);
-      } catch {
-        return Response.json({ error: 'Bridge returned invalid response — tunnel may be down' }, { status: 502 });
-      }
-      if (data.error) {
-        return Response.json({ error: data.error }, { status: 500 });
-      }
-      return Response.json({ response: data.response });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Bridge unreachable';
-      return Response.json({ error: `Can't reach your PC: ${message}` }, { status: 502 });
-    }
-  }
-
-  // Fallback: use Claude API directly (standalone mode)
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
-    return Response.json({ error: 'No API key and no bridge URL' }, { status: 500 });
+    return Response.json({ error: 'API key not configured' }, { status: 500 });
   }
 
   try {
@@ -79,7 +47,7 @@ export async function POST(request: NextRequest) {
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-sonnet-4-6-20250414',
         max_tokens: 1024,
         system: SYSTEM_PROMPT,
         messages,
