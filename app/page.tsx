@@ -228,12 +228,11 @@ export default function Home() {
     setIsSpeaking(false);
 
     const recognition = new SpeechRecognition();
-    recognition.continuous = true;
+    recognition.continuous = false;
     recognition.interimResults = true;
     recognition.lang = 'en-US';
 
     let finalTranscript = '';
-    let silenceTimer: ReturnType<typeof setTimeout>;
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
       let interim = '';
@@ -242,20 +241,14 @@ export default function Home() {
         if (result.isFinal) {
           finalTranscript += result[0].transcript + ' ';
         } else {
-          interim += result[0].transcript;
+          interim = result[0].transcript;
         }
       }
-      setTranscript(finalTranscript + interim);
-
-      clearTimeout(silenceTimer);
-      silenceTimer = setTimeout(() => {
-        recognition.stop();
-      }, 2500);
+      setTranscript(finalTranscript || interim);
     };
 
     recognition.onend = () => {
       setIsListening(false);
-      clearTimeout(silenceTimer);
 
       const text = finalTranscript.trim();
       setTranscript('');
