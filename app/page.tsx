@@ -21,7 +21,7 @@ export default function Home() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<Message[]>([]);
 
-  const BRIDGE_URL = 'https://voice.dykesmotors.com';
+  const BRIDGE_URL = process.env.NEXT_PUBLIC_BRIDGE_URL || 'https://mental-parade-these-prayers.trycloudflare.com';
 
   // Check if bridge (PC) is reachable on mount
   useEffect(() => {
