@@ -40,13 +40,20 @@ export default function Home() {
   // Permanent Cloudflare tunnel to the PC bridge (runs the full Claude Code session).
   const BRIDGE_URL = process.env.NEXT_PUBLIC_BRIDGE_URL || 'https://voice.dykesmotors.com';
 
-  // Check if the PC bridge is reachable on mount
+  // Bridge reachability: check on mount, then keep re-checking every 20s and on
+  // tab return. One flaky health check must never strand the app in cloud mode —
+  // it upgrades back to the PC session as soon as the bridge answers again.
+  const wasBridgeRef = useRef(false);
   useEffect(() => {
+    let cancelled = false;
     const checkBridge = async () => {
       try {
         const res = await fetch(`${BRIDGE_URL}/health`, { signal: AbortSignal.timeout(3000) });
-        if (res.ok) {
-          setMode('bridge');
+        if (cancelled || !res.ok) throw new Error('unreachable');
+        const firstConnect = !wasBridgeRef.current;
+        wasBridgeRef.current = true;
+        setMode('bridge');
+        if (firstConnect) {
           setStatus('Connected to PC — full Claude');
           // Recover a reply that landed while the app was backgrounded (the
           // in-flight fetch dies on app switch, but the bridge keeps history).
@@ -68,15 +75,26 @@ export default function Home() {
           } catch {
             // history is best-effort
           }
-          return;
         }
       } catch {
-        // fall through to standalone
+        if (cancelled) return;
+        wasBridgeRef.current = false;
+        // Only settle the initial 'checking' state; a later blip downgrades the
+        // badge but the next successful check restores it.
+        setMode((m) => (m === 'checking' ? 'standalone' : m === 'bridge' ? 'standalone' : m));
       }
-      setMode('standalone');
-      setStatus('Tap the mic to talk');
     };
     checkBridge();
+    const iv = setInterval(checkBridge, 20000);
+    const onVis = () => {
+      if (document.visibilityState === 'visible') checkBridge();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      cancelled = true;
+      clearInterval(iv);
+      document.removeEventListener('visibilitychange', onVis);
+    };
   }, [BRIDGE_URL]);
 
   // Keep the screen awake while the app is open — the browser kills the mic
@@ -517,7 +535,7 @@ export default function Home() {
       <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
         <div className="flex items-center gap-2">
           <h1 className="text-lg font-semibold text-white">Casey Voice</h1>
-          <span className="text-[9px] text-zinc-600">v3</span>
+          <span className="text-[9px] text-zinc-600">v4</span>
           {mode === 'bridge' && <span className="text-[10px] text-green-500 font-medium">PC</span>}
           {mode === 'standalone' && <span className="text-[10px] text-blue-400 font-medium">CLOUD</span>}
         </div>
