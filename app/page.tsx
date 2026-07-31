@@ -29,6 +29,10 @@ export default function Home() {
   const premiumTtsRef = useRef<boolean | null>(null); // null = unknown, true/false = detected
   const startListeningRef = useRef<() => void>(() => {});
   const restoredRef = useRef(false);
+  // Pause-tolerant capture: speech accumulates here across recognition restarts,
+  // and only a sustained silence (SEND_AFTER_SILENCE_MS) sends it.
+  const pendingTextRef = useRef('');
+  const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Permanent Cloudflare tunnel to the PC bridge (runs the full Claude Code session).
   const BRIDGE_URL = process.env.NEXT_PUBLIC_BRIDGE_URL || 'https://voice.dykesmotors.com';
@@ -316,9 +320,34 @@ export default function Home() {
     [speak, mode, BRIDGE_URL, maybeAutoListen]
   );
 
+  // How long Casey can pause mid-thought before the message sends.
+  const SEND_AFTER_SILENCE_MS = 3000;
+
+  const flushPending = useCallback(() => {
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+    const text = pendingTextRef.current.trim();
+    pendingTextRef.current = '';
+    stoppedRef.current = true; // suppress the auto-restart in onend
+    try { recognitionRef.current?.stop(); } catch { /* not running */ }
+    setIsListening(false);
+    setTranscript('');
+    if (text.length > 1) {
+      emptyListenCountRef.current = 0;
+      sendToApi(text);
+    }
+  }, [sendToApi]);
+
+  const armSilenceTimer = useCallback(() => {
+    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+    silenceTimerRef.current = setTimeout(flushPending, SEND_AFTER_SILENCE_MS);
+  }, [flushPending]);
+
   const startListening = useCallback(() => {
     setError('');
-    setTranscript('');
+    setTranscript(pendingTextRef.current.trim());
     stoppedRef.current = false;
     unlockAudio();
     stopAllSpeech();
@@ -335,27 +364,33 @@ export default function Home() {
     recognition.interimResults = true;
     recognition.lang = 'en-US';
 
-    let finalTranscript = '';
-
     recognition.onresult = (event: SpeechRecognitionEvent) => {
       let interim = '';
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const result = event.results[i];
-        if (result.isFinal) finalTranscript += result[0].transcript + ' ';
+        if (result.isFinal) pendingTextRef.current += result[0].transcript + ' ';
         else interim = result[0].transcript;
       }
-      setTranscript(finalTranscript || interim);
+      setTranscript((pendingTextRef.current + interim).trim());
+      // Any speech activity resets the think-window clock.
+      armSilenceTimer();
     };
 
     recognition.onend = () => {
+      if (stoppedRef.current) {
+        setIsListening(false);
+        return; // flushPending or a manual stop owns this ending
+      }
+      // Recognition gave up on a short silence. If a message is in flight
+      // (pending text or an armed timer), keep the mic hot so a pause to
+      // think does not cut the message off — flushPending will send it.
+      if (pendingTextRef.current.trim().length > 1 || silenceTimerRef.current) {
+        setTimeout(() => startListeningRef.current(), 250);
+        return;
+      }
       setIsListening(false);
-      const text = finalTranscript.trim();
       setTranscript('');
-
-      if (text.length > 1) {
-        emptyListenCountRef.current = 0;
-        sendToApi(text);
-      } else if (handsFreeRef.current && !stoppedRef.current && emptyListenCountRef.current < 4) {
+      if (handsFreeRef.current && emptyListenCountRef.current < 4) {
         // Heard nothing — keep listening a few rounds before going idle.
         emptyListenCountRef.current += 1;
         setStatus('Listening...');
@@ -366,16 +401,18 @@ export default function Home() {
     };
 
     recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-      setIsListening(false);
-      if (event.error !== 'no-speech' && event.error !== 'aborted') {
-        setError(`Mic error: ${event.error}`);
-        setStatus('Tap the mic to talk');
-      } else if (handsFreeRef.current && !stoppedRef.current && event.error === 'no-speech' && emptyListenCountRef.current < 4) {
-        emptyListenCountRef.current += 1;
-        setTimeout(() => startListeningRef.current(), 300);
-      } else {
-        setStatus(handsFreeRef.current ? 'Hands-free paused — tap to resume' : 'Tap the mic to talk');
+      if (event.error === 'no-speech' || event.error === 'aborted') {
+        // onend fires next and handles restart/idle logic.
+        return;
       }
+      setIsListening(false);
+      pendingTextRef.current = '';
+      if (silenceTimerRef.current) {
+        clearTimeout(silenceTimerRef.current);
+        silenceTimerRef.current = null;
+      }
+      setError(`Mic error: ${event.error}`);
+      setStatus('Tap the mic to talk');
     };
 
     recognitionRef.current = recognition;
@@ -386,7 +423,7 @@ export default function Home() {
     } catch {
       // start() throws if already running — ignore
     }
-  }, [sendToApi, stopAllSpeech, unlockAudio]);
+  }, [armSilenceTimer, stopAllSpeech, unlockAudio]);
 
   // Keep a stable ref so timeouts/promises always call the latest version.
   useEffect(() => {
@@ -394,9 +431,18 @@ export default function Home() {
   }, [startListening]);
 
   const stopListening = useCallback(() => {
+    // Tap while a message is pending = send it now instead of discarding.
+    if (pendingTextRef.current.trim().length > 1) {
+      flushPending();
+      return;
+    }
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
     stoppedRef.current = true;
     recognitionRef.current?.stop();
-  }, []);
+  }, [flushPending]);
 
   const handleMicClick = useCallback(() => {
     unlockAudio();
