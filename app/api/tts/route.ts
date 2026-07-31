@@ -5,7 +5,7 @@ import { NextRequest } from 'next/server';
 // at every tier; each env var just makes it sound better.
 const ELEVEN_KEY = process.env.ELEVENLABS_API_KEY;
 const ELEVEN_VOICE_ID = process.env.ELEVENLABS_VOICE_ID; // "Casey Dykes PVC" clone
-const ELEVEN_MODEL = process.env.ELEVENLABS_MODEL || 'eleven_turbo_v2_5'; // low latency, PVC-compatible
+const ELEVEN_MODEL = process.env.ELEVENLABS_MODEL || 'eleven_flash_v2'; // the ONLY model the PVC fine-tuned on — turbo_v2_5 fine-tune FAILED, renders generic
 const OPENAI_KEY = process.env.OPENAI_API_KEY;
 const TTS_MODEL = process.env.TTS_MODEL || 'gpt-4o-mini-tts';
 const TTS_VOICE = process.env.TTS_VOICE || 'ash'; // warm, natural male voice
@@ -24,7 +24,7 @@ async function elevenLabsSpeech(text: string): Promise<Response | null> {
         body: JSON.stringify({
           text,
           model_id: ELEVEN_MODEL,
-          voice_settings: { stability: 0.5, similarity_boost: 0.75 },
+          voice_settings: { stability: 0.5, similarity_boost: 0.55, style: 0, use_speaker_boost: true },
         }),
       },
     );
