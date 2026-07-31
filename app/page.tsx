@@ -348,7 +348,8 @@ export default function Home() {
   );
 
   // How long Casey can pause mid-thought before the message sends.
-  const SEND_AFTER_SILENCE_MS = 5000;
+  // Casey ruled 7/31: 3 seconds is adequate.
+  const SEND_AFTER_SILENCE_MS = 3000;
 
   const flushPending = useCallback(() => {
     if (silenceTimerRef.current) {
@@ -516,6 +517,7 @@ export default function Home() {
       <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
         <div className="flex items-center gap-2">
           <h1 className="text-lg font-semibold text-white">Casey Voice</h1>
+          <span className="text-[9px] text-zinc-600">v3</span>
           {mode === 'bridge' && <span className="text-[10px] text-green-500 font-medium">PC</span>}
           {mode === 'standalone' && <span className="text-[10px] text-blue-400 font-medium">CLOUD</span>}
         </div>
