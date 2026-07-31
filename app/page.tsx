@@ -28,6 +28,7 @@ export default function Home() {
   const audioUnlockedRef = useRef(false);
   const premiumTtsRef = useRef<boolean | null>(null); // null = unknown, true/false = detected
   const startListeningRef = useRef<() => void>(() => {});
+  const restoredRef = useRef(false);
 
   // Permanent Cloudflare tunnel to the PC bridge (runs the full Claude Code session).
   const BRIDGE_URL = process.env.NEXT_PUBLIC_BRIDGE_URL || 'https://voice.dykesmotors.com';
@@ -40,6 +41,26 @@ export default function Home() {
         if (res.ok) {
           setMode('bridge');
           setStatus('Connected to PC — full Claude');
+          // Recover a reply that landed while the app was backgrounded (the
+          // in-flight fetch dies on app switch, but the bridge keeps history).
+          try {
+            const h = await fetch(`${BRIDGE_URL}/history`, { signal: AbortSignal.timeout(3000) });
+            if (h.ok) {
+              const { exchanges } = await h.json();
+              const last = exchanges?.[exchanges.length - 1];
+              if (last?.assistant) {
+                setMessages((prev) => {
+                  const tail = prev[prev.length - 1];
+                  if (tail?.role === 'user' && tail.content === last.user) {
+                    return [...prev, { role: 'assistant', content: last.assistant }];
+                  }
+                  return prev;
+                });
+              }
+            }
+          } catch {
+            // history is best-effort
+          }
           return;
         }
       } catch {
@@ -57,6 +78,30 @@ export default function Home() {
     setHandsFree(saved);
     handsFreeRef.current = saved;
   }, []);
+
+  // Restore the conversation so app switches / reloads don't wipe the chat
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem('voiceMessages');
+      if (saved) {
+        const parsed = JSON.parse(saved) as Message[];
+        if (Array.isArray(parsed) && parsed.length) setMessages(parsed);
+      }
+    } catch {
+      // corrupt store — start fresh
+    }
+    restoredRef.current = true;
+  }, []);
+
+  // Persist the conversation (bounded), but never before restore has run
+  useEffect(() => {
+    if (!restoredRef.current) return;
+    try {
+      window.localStorage.setItem('voiceMessages', JSON.stringify(messages.slice(-40)));
+    } catch {
+      // storage full/unavailable — non-fatal
+    }
+  }, [messages]);
 
   useEffect(() => {
     messagesRef.current = messages;

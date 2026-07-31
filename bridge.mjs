@@ -1,51 +1,40 @@
 /**
- * Casey Voice Bridge
- * Receives voice text from phone → feeds to Claude Code CLI → returns response
- * Uses --continue to maintain conversation across messages
+ * Casey Voice Bridge — File Relay
+ * Phone voice → file → Claude Code CLI session reads it → response file → phone
+ * This connects the phone directly to the active CLI session.
  */
 
 import http from 'http';
-import { execFile } from 'child_process';
+import fs from 'fs';
+import path from 'path';
 
 const PORT = 3456;
-const CLAUDE_PATH = 'C:\\Users\\Cdyke\\.local\\bin\\claude.exe';
-const WORKING_DIR = 'C:\\Users\\Cdyke';
+const INBOX = 'C:\\Users\\Cdyke\\.voice-inbox.json';
+const OUTBOX = 'C:\\Users\\Cdyke\\.voice-outbox.json';
 
 let processing = false;
-let sessionStarted = false;
+// Completed exchanges, newest last. Lets the phone recover a reply that landed
+// while the app was backgrounded (iOS kills the in-flight fetch on app switch).
+const history = [];
 
-function runClaude(text) {
-  return new Promise((resolve) => {
-    console.log(`\n[Voice] Casey said: "${text}"`);
-    console.log('[Claude] Processing...');
-
-    const args = ['--print', text, '--output-format', 'text'];
-    // After first message, continue the conversation
-    if (sessionStarted) {
-      args.push('--continue');
-    }
-
-    execFile(
-      CLAUDE_PATH,
-      args,
-      {
-        cwd: WORKING_DIR,
-        timeout: 120000,
-        maxBuffer: 1024 * 1024,
-        windowsHide: true,
-      },
-      (error, stdout) => {
-        if (error && !stdout) {
-          console.error('[Claude] Error:', error.message);
-          resolve('Sorry, I had trouble processing that. Try again.');
-          return;
+function waitForOutbox(timeoutMs = 120000) {
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+    const poll = setInterval(() => {
+      try {
+        if (fs.existsSync(OUTBOX)) {
+          const data = JSON.parse(fs.readFileSync(OUTBOX, 'utf-8'));
+          fs.unlinkSync(OUTBOX); // clean up
+          clearInterval(poll);
+          resolve(data.response);
+        } else if (Date.now() - start > timeoutMs) {
+          clearInterval(poll);
+          reject(new Error('Timed out waiting for response'));
         }
-        sessionStarted = true;
-        const response = stdout.trim();
-        console.log(`[Claude] Response: ${response.slice(0, 200)}${response.length > 200 ? '...' : ''}`);
-        resolve(response);
+      } catch (err) {
+        // File might be mid-write, just retry
       }
-    );
+    }, 500);
   });
 }
 
@@ -60,15 +49,15 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === 'GET' && req.url === '/health') {
+  if (req.method === 'GET' && (req.url === '/' || req.url === '/health')) {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok', processing, sessionStarted }));
+    res.end(JSON.stringify({ status: 'ok', processing, mode: 'relay' }));
     return;
   }
 
-  if (req.method === 'GET' && req.url === '/') {
+  if (req.method === 'GET' && req.url === '/history') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok', processing }));
+    res.end(JSON.stringify({ exchanges: history.slice(-20) }));
     return;
   }
 
@@ -85,14 +74,38 @@ const server = http.createServer(async (req, res) => {
         }
         if (processing) {
           res.writeHead(429, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Still thinking, hang on' }));
+          res.end(JSON.stringify({ error: 'Still waiting for response, hang on' }));
           return;
         }
+
         processing = true;
-        const response = await runClaude(text.trim());
-        processing = false;
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ response }));
+        console.log(`\n[Voice] Casey said: "${text.trim()}"`);
+
+        // Clean up any stale outbox
+        try { fs.unlinkSync(OUTBOX); } catch {}
+
+        // Write to inbox for the CLI session to pick up
+        fs.writeFileSync(INBOX, JSON.stringify({
+          text: text.trim(),
+          timestamp: Date.now()
+        }));
+
+        console.log('[Relay] Wrote to inbox, waiting for CLI response...');
+
+        try {
+          const response = await waitForOutbox();
+          processing = false;
+          history.push({ user: text.trim(), assistant: response, ts: Date.now() });
+          if (history.length > 50) history.shift();
+          console.log(`[Relay] Got response: ${response.slice(0, 200)}${response.length > 200 ? '...' : ''}`);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ response }));
+        } catch (err) {
+          processing = false;
+          console.error('[Relay] Timeout — no response from CLI session');
+          res.writeHead(504, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'No response from CLI — is Claude Code running?' }));
+        }
       } catch {
         processing = false;
         res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -102,22 +115,18 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === 'POST' && req.url === '/reset') {
-    sessionStarted = false;
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'session reset' }));
-    return;
-  }
-
   res.writeHead(404);
   res.end('Not found');
 });
 
 server.listen(PORT, () => {
   console.log('========================================');
-  console.log('  CASEY VOICE BRIDGE — Opus 4.6');
+  console.log('  CASEY VOICE BRIDGE — Relay Mode');
   console.log(`  http://localhost:${PORT}`);
   console.log('  Tunnel: voice.dykesmotors.com');
+  console.log('');
+  console.log('  Phone voice → inbox file → CLI session');
+  console.log('  CLI response → outbox file → phone');
   console.log('========================================');
   console.log('Waiting for messages from phone...');
 });
