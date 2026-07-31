@@ -79,6 +79,30 @@ export default function Home() {
     checkBridge();
   }, [BRIDGE_URL]);
 
+  // Keep the screen awake while the app is open — the browser kills the mic
+  // and the conversation the moment the phone locks, so screen timeout is fatal.
+  useEffect(() => {
+    type WakeLockNav = Navigator & { wakeLock?: { request: (t: 'screen') => Promise<{ release: () => Promise<void> }> } };
+    let lock: { release: () => Promise<void> } | null = null;
+    const acquire = async () => {
+      try {
+        lock = (await (navigator as WakeLockNav).wakeLock?.request('screen')) ?? null;
+      } catch {
+        // unsupported or denied — nothing we can do
+      }
+    };
+    acquire();
+    const onVis = () => {
+      // Wake locks auto-release when the tab is hidden; re-grab on return.
+      if (document.visibilityState === 'visible') acquire();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      document.removeEventListener('visibilitychange', onVis);
+      lock?.release().catch(() => {});
+    };
+  }, []);
+
   // Restore hands-free preference
   useEffect(() => {
     const saved = typeof window !== 'undefined' && window.localStorage.getItem('handsFree') === '1';
@@ -324,7 +348,7 @@ export default function Home() {
   );
 
   // How long Casey can pause mid-thought before the message sends.
-  const SEND_AFTER_SILENCE_MS = 3000;
+  const SEND_AFTER_SILENCE_MS = 5000;
 
   const flushPending = useCallback(() => {
     if (silenceTimerRef.current) {
