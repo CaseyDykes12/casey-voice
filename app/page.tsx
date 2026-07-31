@@ -33,6 +33,9 @@ export default function Home() {
   // and only a sustained silence (SEND_AFTER_SILENCE_MS) sends it.
   const pendingTextRef = useRef('');
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // One-shot flag: suppresses the onend auto-restart after a flush WITHOUT
+  // marking the session user-stopped (stoppedRef would kill hands-free resume).
+  const suppressRestartRef = useRef(false);
 
   // Permanent Cloudflare tunnel to the PC bridge (runs the full Claude Code session).
   const BRIDGE_URL = process.env.NEXT_PUBLIC_BRIDGE_URL || 'https://voice.dykesmotors.com';
@@ -330,7 +333,7 @@ export default function Home() {
     }
     const text = pendingTextRef.current.trim();
     pendingTextRef.current = '';
-    stoppedRef.current = true; // suppress the auto-restart in onend
+    suppressRestartRef.current = true; // suppress the auto-restart in onend
     try { recognitionRef.current?.stop(); } catch { /* not running */ }
     setIsListening(false);
     setTranscript('');
@@ -377,9 +380,14 @@ export default function Home() {
     };
 
     recognition.onend = () => {
+      if (suppressRestartRef.current) {
+        suppressRestartRef.current = false;
+        setIsListening(false);
+        return; // flushPending owns this ending; hands-free resumes after the reply
+      }
       if (stoppedRef.current) {
         setIsListening(false);
-        return; // flushPending or a manual stop owns this ending
+        return; // user stopped on purpose
       }
       // Recognition gave up on a short silence. If a message is in flight
       // (pending text or an armed timer), keep the mic hot so a pause to
